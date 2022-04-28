@@ -96,3 +96,32 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_sigalarm(void)
+{
+  // 两次输出的ticks间隔
+  int ticks;
+  if (argint(0, &ticks) < 0) {
+    return -1;
+  }
+  uint64 fun;
+  if (argaddr(1, &fun) < 0) {
+    return -1;
+  }
+  struct proc* p = myproc();
+  p->ticks = ticks;
+  p->fun = fun;
+  p->spend = 0;
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc * p = myproc();
+  printf("%p %p", p->trapframe->sp, p->alarm_trapframe->sp);
+  *p->trapframe = *p->alarm_trapframe;
+  p->is_alarming = 0;
+  return 0;
+}

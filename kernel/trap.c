@@ -77,8 +77,22 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    // 开启了Alarm
+    if (p->ticks != 0) {
+      p->spend ++;
+      if (p->spend >= p->ticks && p->is_alarming == 0) {
+        // 将trapframe拷贝给alarm_trapframe，便于后续的恢复
+        *p->alarm_trapframe = *p->trapframe;
+
+        p->trapframe->epc = p->fun;
+        p->spend = 0;
+        p->is_alarming = 1;
+      }
+    }
+    
     yield();
+  }
 
   usertrapret();
 }

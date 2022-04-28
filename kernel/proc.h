@@ -103,4 +103,11 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+
+  int ticks;                   // Alarm
+  uint64 fun;                  // 周期执行的用户态函数
+  int spend;                   // 距离上次Alarm经过的时间片
+  int is_alarming;             // 是否正处于Alarm状态
+  struct trapframe *alarm_trapframe; // 
 };
