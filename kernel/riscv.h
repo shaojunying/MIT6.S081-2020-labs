@@ -311,6 +311,15 @@ r_ra()
   return x;
 }
 
+// 从s0寄存器上获取当前栈桢的起始信息
+static inline uint64
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}
+
 // flush the TLB.
 static inline void
 sfence_vma()

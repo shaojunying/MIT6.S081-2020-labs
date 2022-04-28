@@ -132,3 +132,20 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void 
+backtrace() {
+  // 获取当前栈桢的起始地址
+  uint64 stack_frame = r_fp();
+  // 获取当前栈的页头（XV6为每个栈分配一个Page）
+  uint64 end = PGROUNDUP(stack_frame);
+  uint64 return_address;
+  printf("%p\n", end);
+  while (stack_frame <= end)
+  {
+    return_address = *((uint64*) (stack_frame - 8));
+    printf("return_address: %p\n", return_address);
+    stack_frame = *((uint64*) (stack_frame - 16));
+    printf("stack_frame: %p\n", stack_frame);
+  }
+}
