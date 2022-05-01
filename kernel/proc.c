@@ -238,13 +238,17 @@ userinit(void)
 int
 growproc(int n)
 {
-  uint sz;
+  // 这里也是需要使用uint64来存储，因为虚拟地址最大为38位，用int将导致溢出。
+  uint64 sz;
   struct proc *p = myproc();
 
   sz = p->sz;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+    if (sz + n >= MAXVA) {
+      // 超出了最大虚拟内存，返回错误
       return -1;
+    }else {
+      sz = sz + n;
     }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);

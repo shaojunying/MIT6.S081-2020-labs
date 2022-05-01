@@ -37,6 +37,7 @@ void
 usertrap(void)
 {
   int which_dev = 0;
+  uint64 scause = 0;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -67,6 +68,19 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (((scause = r_scause()) == 13 || scause == 15)) {
+    uint64 va = r_stval();
+    // Page Fault
+    if (!need_lazy_allocation(va)) {
+      p->killed = 1;
+    }else {
+      // 执行Lazy Allocation
+      uint64 pa = handle_lazy_allocation(va);
+      if (!pa) {
+        printf("failed to lazy allocate\n");
+        p->killed = 1;
+      }
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

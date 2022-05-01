@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -101,10 +103,16 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
-    return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  if(pte == 0 || (*pte & PTE_V) == 0) {
+    // 二级页表中pte无效 || 三级页表中pte无效
+    if (!need_lazy_allocation(va)) {
+      return 0;
+    }
+    if (!handle_lazy_allocation(va)) {
+      return 0;
+    }
+    pte = walk(pagetable, va, 0);
+  }
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
@@ -180,10 +188,19 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    // 需要分别处理二级页表中pte无效、三级页表中pte无效的情况
+    if(a >= MAXVA){
+      printf("sz: %p\n",myproc()->sz);
+      printf("uvmunmap: %p\n", a);
+    }
+    if((pte = walk(pagetable, a, 0)) == 0){
+      // 查看walk源代码，这里对应二级页表没有分配的情况。 （三级pte还不存在，因此pte（页表项的地址）为0）
+      continue;
+    }
+    if((*pte & PTE_V) == 0){
+      // 到这里说明二级页表存在，但是二级页表上的三级PTE是无效的（*pte直接为0）。
+      continue;
+    }
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -314,10 +331,13 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+    if((pte = walk(old, i, 0)) == 0){
+      // 参照uvmunmap
+      continue; 
+    }
+    if((*pte & PTE_V) == 0){
+      continue;
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -439,4 +459,33 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+
+uint64
+handle_lazy_allocation(uint64 va){
+  // 给va申请一块物理页
+  uint64 va_start = PGROUNDDOWN(va);
+  char * mem = kalloc();
+  if(mem == 0){
+    return 0;
+  }
+  memset(mem, 0, PGSIZE);
+  struct proc * p = myproc();
+  if(mappages(p->pagetable, va_start, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+    kfree(mem);
+    uvmdealloc(p->pagetable, va_start, va_start + PGSIZE);
+    return 0;
+  }
+  return 1;
+}
+
+uint64
+need_lazy_allocation(uint64 va){
+  struct proc * p = myproc();
+  if (va >= p->sz || va >= MAXVA || va < p->trapframe->sp) {
+    // 超出堆的上界 超出最大内存地址 小于栈顶（访问未使用的栈区域或Guard Page）
+    return 0;
+  }
+  return 1;
 }

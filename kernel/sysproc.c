@@ -41,7 +41,8 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
+  // 虚拟地址最多为38位，所以这里需要使用uint64而不是32位的int来存储
+  uint64 addr;
   int n;
 
   if(argint(0, &n) < 0)
