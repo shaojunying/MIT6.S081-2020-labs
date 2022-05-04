@@ -99,7 +99,9 @@
 // [E1000 3.3.3]
 struct tx_desc
 {
+  // buffer 的地址
   uint64 addr;
+  
   uint16 length;
   uint8 cso;
   uint8 cmd;

@@ -20,6 +20,7 @@ struct sock {
   uint16 lport;      // the local UDP port number
   uint16 rport;      // the remote UDP port number
   struct spinlock lock; // protects the rxq
+  // 一个队列，存储socket上等待被处理的网络包mbuf
   struct mbufq rxq;  // a queue of packets waiting to be received
 };
 
@@ -177,7 +178,9 @@ sockrecvudp(struct mbuf *m, uint32 raddr, uint16 lport, uint16 rport)
   return;
 
 found:
+  // 找到了网络包对应的socket
   acquire(&si->lock);
+  // 将当前网络包追加到
   mbufq_pushtail(&si->rxq, m);
   wakeup(&si->rxq);
   release(&si->lock);

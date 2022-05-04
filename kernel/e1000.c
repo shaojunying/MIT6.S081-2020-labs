@@ -9,7 +9,9 @@
 #include "net.h"
 
 #define TX_RING_SIZE 16
+// 要发送内容的描述
 static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16)));
+// 发送缓冲区 存储要发送的数据
 static struct mbuf *tx_mbufs[TX_RING_SIZE];
 
 #define RX_RING_SIZE 16
@@ -40,6 +42,7 @@ e1000_init(uint32 *xregs)
   __sync_synchronize();
 
   // [E1000 14.5] Transmit initialization
+  // 初始化发送队列
   memset(tx_ring, 0, sizeof(tx_ring));
   for (i = 0; i < TX_RING_SIZE; i++) {
     tx_ring[i].status = E1000_TXD_STAT_DD;
@@ -102,6 +105,7 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
+  printf("e1000_transmit is called!\n");
   
   return 0;
 }
@@ -115,6 +119,7 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  printf("e1000_recv is called!\n");
 }
 
 void

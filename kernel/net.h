@@ -6,9 +6,13 @@
 #define MBUF_DEFAULT_HEADROOM  128
 
 struct mbuf {
+  // 用于构成Socket上等待处理的包的列表
   struct mbuf  *next; // the next mbuf in the chain
+  // 指向缓冲区的开始位置（拆包时该地址会越来越大；封装包时该地址会越来越小）
   char         *head; // the current start position of the buffer
+  // 记录缓冲区数据的长度（拆包时该长度越来越小；封装包时该长度越来越大）
   unsigned int len;   // the length of the buffer
+  // 存储buf的具体数据
   char         buf[MBUF_SIZE]; // the backing store
 };
 

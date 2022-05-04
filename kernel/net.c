@@ -17,6 +17,7 @@ static uint8 broadcast_mac[ETHADDR_LEN] = { 0xFF, 0XFF, 0XFF, 0XFF, 0XFF, 0XFF }
 
 // Strips data from the start of the buffer and returns a pointer to it.
 // Returns 0 if less than the full requested length is available.
+// 删除m[0, len)之间的数据，只保留m[len, -1)
 char *
 mbufpull(struct mbuf *m, unsigned int len)
 {
@@ -29,6 +30,7 @@ mbufpull(struct mbuf *m, unsigned int len)
 }
 
 // Prepends data to the beginning of the buffer and returns a pointer to it.
+// 在mbuf前追加len字节的数据（从[0, n)变成[0, len + n) ）
 char *
 mbufpush(struct mbuf *m, unsigned int len)
 {
@@ -87,6 +89,7 @@ mbuffree(struct mbuf *m)
 }
 
 // Pushes an mbuf to the end of the queue.
+// 向q的末尾追加一个mbuf结构
 void
 mbufq_pushtail(struct mbufq *q, struct mbuf *m)
 {
@@ -290,6 +293,7 @@ net_rx_udp(struct mbuf *m, uint16 len, struct ip *iphdr)
   uint16 sport, dport;
 
 
+  // 解析UDP包
   udphdr = mbufpullhdr(m, *udphdr);
   if (!udphdr)
     goto fail;
@@ -323,6 +327,7 @@ net_rx_ip(struct mbuf *m)
   struct ip *iphdr;
   uint16 len;
 
+  // 解析IP包  
   iphdr = mbufpullhdr(m, *iphdr);
   if (!iphdr)
 	  goto fail;
@@ -358,6 +363,7 @@ void net_rx(struct mbuf *m)
   struct eth *ethhdr;
   uint16 type;
 
+  // 解析最外层的以太网帧
   ethhdr = mbufpullhdr(m, *ethhdr);
   if (!ethhdr) {
     mbuffree(m);
@@ -366,8 +372,10 @@ void net_rx(struct mbuf *m)
 
   type = ntohs(ethhdr->type);
   if (type == ETHTYPE_IP)
+    // IP包
     net_rx_ip(m);
   else if (type == ETHTYPE_ARP)
+    // ARP包
     net_rx_arp(m);
   else
     mbuffree(m);
