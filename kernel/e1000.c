@@ -11,7 +11,7 @@
 #define TX_RING_SIZE 16
 // 要发送内容的描述
 static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16)));
-// 发送缓冲区 存储要发送的数据
+// 发送缓冲区 存放此指针是为了释放结构体
 static struct mbuf *tx_mbufs[TX_RING_SIZE];
 
 #define RX_RING_SIZE 16
@@ -98,28 +98,73 @@ e1000_init(uint32 *xregs)
 int
 e1000_transmit(struct mbuf *m)
 {
-  //
-  // Your code here.
-  //
-  // the mbuf contains an ethernet frame; program it into
-  // the TX descriptor ring so that the e1000 sends it. Stash
-  // a pointer so that it can be freed after sending.
-  //
-  printf("e1000_transmit is called!\n");
+  // 这里是深拷贝
+  // acquire(&e1000_lock);
+  uint32 index = regs[E1000_TDT];
+  struct tx_desc desc = tx_ring[index];
+  if ((desc.status & E1000_TXD_STAT_DD) == 0) {
+    // tail中的数据还没有被发出，新来的数据发送失败
+    release(&e1000_lock);
+    return -1;
+  }
+
+  if (tx_mbufs[index] != 0) {
+    // 释放tail中已发送数据占用的缓冲区
+    mbuffree(tx_mbufs[index]);
+    tx_mbufs[index] = 0;
+  }
   
+  tx_mbufs[index] = m;
+
+  // 添加当前buf
+  memset(&desc,0, sizeof(desc));
+
+  // 更新desc中的信息
+  desc.addr = (uint64)m->head;
+  desc.length = m->len;
+  desc.status |= E1000_TXD_STAT_DD;
+  desc.cmd |= (E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP);
+  // 将更新后的desc存入原来的数组中
+  tx_ring[index] = desc;
+
+  // 更新控制寄存器
+  regs[E1000_TDT] = (index + 1) % TX_RING_SIZE;
+  // release(&e1000_lock);
   return 0;
 }
 
 static void
 e1000_recv(void)
 {
-  //
-  // Your code here.
-  //
-  // Check for packets that have arrived from the e1000
-  // Create and deliver an mbuf for each packet (using net_rx()).
-  //
-  printf("e1000_recv is called!\n");
+  // 我们需要对ring加锁，来保证操作的原子性
+  // acquire(&e1000_lock1);
+  while (1) {
+    uint32 index = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    struct rx_desc desc = rx_ring[index];
+    if ((desc.status & E1000_RXD_STAT_DD) == 0) {
+      // 下一个desc还没有就绪
+      break;
+    }
+    // 获取mbuf结构，进而获取收到的packet
+    struct mbuf * b = rx_mbufs[index];
+    b->len = desc.length;
+    // 将mbuf交给网络栈处理
+    net_rx(b);
+    // printf("hehehe\n");
+    
+    // 分配新的mbuf结构
+    memset(&desc, 0, sizeof(desc));
+    b = mbufalloc(0);
+    if (!b)
+      panic("e1000");
+    rx_mbufs[index] = b;
+    desc.addr = (uint64)b->head;
+    rx_ring[index] = desc;
+    
+    // 更新控制寄存器
+    regs[E1000_RDT] = index;
+  }
+  // release(&e1000_lock1);
 }
 
 void
