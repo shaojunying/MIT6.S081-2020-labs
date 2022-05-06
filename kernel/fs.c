@@ -386,7 +386,7 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
   bn -= NDIRECT;
-
+  // NINDIRECT 间接块的个数，1024 Byte / 4Byte = 32
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0)
@@ -400,6 +400,40 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
+
+  // N_DOUBLE_INDIRENT 二级间接块个数
+  if (bn < N_DOUBLE_INDIRECT) {
+    // Load double indirect block, allocating if necessary.
+    if ((addr = ip->addrs[NDIRECT + 1]) == 0) {
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    }
+    // Read double indirect block
+    bp = bread(ip->dev, addr);
+    // read indirect block
+    a = (uint*)bp->data;
+    if ((addr = a[bn / NINDIRECT]) == 0) {
+      a[bn / NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    // 因为此时还在持有inode锁，所以这里可以直接调用brelse，不用担心并发问题
+    brelse(bp);
+
+
+    // Read indirect block
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if ((addr = a[bn % NINDIRECT]) == 0) {
+      // 数据块
+      a[bn % NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    // 分别释放 indirect_block_buf, double_indirect_block_buf
+    brelse(bp);
+    // 返回
+    return addr;
+  }
+  
 
   panic("bmap: out of range");
 }
@@ -430,6 +464,30 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  // 释放double indirect block
+  if (ip->addrs[NDIRECT + 1]) {
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    for (j = 0; j < NINDIRECT; j ++) {
+      if (a[j]) {
+        // 首先需要读取这个块
+        struct buf * indirect_block = bread(ip->dev, a[j]);
+        uint* data = (uint*) indirect_block->data;
+        for (int k = 0; k < NINDIRECT; k ++) {
+          if (data[k]) {
+            bfree(ip->dev, data[k]);
+          }
+        }
+        brelse(indirect_block);
+        bfree(ip->dev, a[j]);
+        a[j] = 0;
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;
