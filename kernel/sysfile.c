@@ -165,71 +165,6 @@ bad:
   return -1;
 }
 
-// 创建一个符号连接，符号连接的路径为newpath, 符号连接的目标地址为oldpath
-uint64
-sys_symlink(void) {
-  char oldpath[MAXPATH], newpath[MAXPATH], name[DIRSIZ];
-  struct inode* parent_inode, *new_inode;
-  uint off;
-  if (argstr(0, oldpath, MAXARG) < 0 || argstr(1, newpath, MAXPATH) < 0) {
-    return -1;
-  }
-  // 从path中提取出 父路径 和 新文件名
-  if ((parent_inode = nameiparent(newpath, name)) == 0) {
-    return -1;
-  }
-
-
-  begin_op();
-  
-  // 之后需要访问 父目录，加锁
-  ilock(parent_inode);
-
-  // 判断父目录中是否已存在同名 文件或目录
-  if (dirlookup(parent_inode, name, &off) != 0) {
-    // 已存在同名文件或目录
-    iunlockput(parent_inode);
-    end_op();
-    return -1;
-  }
-
-  // 创建inode，用于存储新文件
-  if ((new_inode = ialloc(parent_inode->dev, T_SYMLINK)) == 0) {
-    // 创建新inode失败，释放锁，返回
-    iunlockput(parent_inode);
-    end_op();
-    return -1;
-  }
-
-  ilock(new_inode);
-  new_inode->nlink = 1;
-  // 更新了属性，记录一下，我们修改了inode元数据
-  iupdate(new_inode);
-
-  // 想inode中写入内容，需要拷贝末尾的空字符
-  if (writei(new_inode, 0, (uint64)oldpath, 0, strlen(oldpath) + 1) < 0) {
-    // 写入失败，释放inode, 释放两个锁，返回
-    iunlockput(new_inode);
-    iunlockput(parent_inode);
-    end_op();
-    return -1;
-  }
-
-  // 将inode写入到父目录
-  if (dirlink(parent_inode, name, new_inode->inum) < 0) {
-    // 写入失败，清空数据块，释放inode, 释放两个锁，返回
-    iunlockput(new_inode);
-    iunlockput(parent_inode);
-    end_op();
-    return -1;
-  }
-
-  // 写入成功，释放两个锁，返回
-  iunlockput(new_inode);
-  iunlockput(parent_inode);
-  end_op();
-  return 0;
-}
 
 // Is the directory dp empty except for "." and ".." ?
 static int
@@ -574,5 +509,34 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+// 创建一个符号连接，符号连接的路径为newpath, 符号连接的目标地址为oldpath
+uint64
+sys_symlink(void) {
+  char oldpath[MAXPATH], newpath[MAXPATH];
+  struct inode *new_inode;
+  if (argstr(0, oldpath, MAXARG) < 0 || argstr(1, newpath, MAXPATH) < 0) {
+    return -1;
+  }
+
+  begin_op();
+  
+  // 创建文件
+  if ((new_inode = create(newpath, T_SYMLINK, 0, 0)) == 0) {
+    end_op();
+    return -1;
+  }
+  // 向文件中写入目标路径
+  if (writei(new_inode, 0, (uint64)oldpath, 0, strlen(oldpath)) < 0) {
+    // 写入失败
+    iput(new_inode);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(new_inode);
+  end_op();
   return 0;
 }
