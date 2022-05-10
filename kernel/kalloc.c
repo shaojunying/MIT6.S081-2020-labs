@@ -8,6 +8,7 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#include "proc.h"
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -26,7 +27,12 @@ struct {
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  struct cpu *c;
+  for (int i = 0; i < NCPU; i ++) {
+    c = &cpus[i];
+    initlock(&c->lock, "kmem");
+  }
+
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -47,6 +53,7 @@ void
 kfree(void *pa)
 {
   struct run *r;
+  struct cpu *c;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
@@ -55,11 +62,31 @@ kfree(void *pa)
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
+  c = mycpu();
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  acquire(&c->lock);
+  r->next = c->freelist;
+  c->freelist = r;
+  release(&c->lock);
+}
+
+// 将链表均分为两段，长度为奇数的话前一段更多一些
+// 第一段以r开头，第二段以返回值开头
+struct run *
+split(struct run * r){
+  if (!r) {
+    return 0;
+  }
+  struct run * slow = r, *fast = r;
+  int i = 0;
+  while (fast->next != 0 && fast->next->next != 0) {
+    fast = fast->next->next;
+    slow = slow->next;
+    i ++;
+  }
+  struct run * head2 = slow->next;
+  slow->next = 0;
+  return head2;
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -69,14 +96,47 @@ void *
 kalloc(void)
 {
   struct run *r;
+  struct cpu *c;
+  struct cpu *c1;
+  c = mycpu();
+  acquire(&c->lock);
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  // 获取当前cpu的空闲内存列表
+  r = c->freelist;
 
-  if(r)
+  // 如果当前进程没有空闲内存，就尝试从别的进程偷
+  if (!r) {
+    // 当前进程已经没有空闲内存了，尝试从其他进程的内存中偷一些过来
+    for (int i = 0; i < NCPU; i ++) {
+      if (c == &cpus[i]) {
+        continue;
+      }
+      // 判断第i个CPU是否还有空闲内存
+      c1 = &cpus[i];
+      acquire(&c1->lock);
+      // 判断该CPU中是否还有空闲内存
+      if (c1->freelist) {
+        struct run * head = c1->freelist;
+        r = head;
+        c1->freelist = split(head);
+        c->freelist = head->next;
+        // r = head;
+        // c1->freelist = r->next;
+      }
+      release(&c1->lock);
+      if (r) {
+        break;
+      }
+    }
+  }else {
+    c->freelist = r->next;
+  }
+  
+  release(&c->lock);
+  if (r) {
+    // 将申请到内存填充junk
     memset((char*)r, 5, PGSIZE); // fill with junk
-  return (void*)r;
+  }
+  
+  return (void *)r;
 }
