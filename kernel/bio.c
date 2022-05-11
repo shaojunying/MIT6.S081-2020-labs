@@ -28,7 +28,11 @@ struct {
   struct spinlock lock;
   struct buf buf[NBUF];
   // 哈希桶，为dev, blockno申请或释放buffer时需要对其响应哈希桶加锁
+
+  // 保护桶内的dev, block不会被转化
   struct spinlock buckets[BUFFERS_BUCKETS];
+  // 保护桶内的buf不会被重用
+  struct spinlock reuse_locks[BUFFERS_BUCKETS];
   struct buf      buffers[BUFFERS_BUCKETS];
 
   // Linked list of all buffers, through prev/next.
@@ -135,30 +139,26 @@ bget(uint dev, uint blockno)
     acquiresleep(&b->lock);
     return b;
   }
-  release(&(bcache.buckets[index]));
   // 没有获取到
-
-  // 获取大锁
-  acquire(&bcache.lock);
-  if ((b = get_buffer_for_block(&bcache.buffers[index], dev, blockno)) != 0) {
-    // 获取到了
-    b->refcnt ++;
-    release(&(bcache.buckets[index]));
-    acquiresleep(&b->lock);
-    return b;
-  }
 
   // 找到全局LRU, 同时需要持有LRU对应桶的锁
   struct buf * least_recently_used_buf = 0;
   int least_index = -1;
   for (int i = 0; i < BUFFERS_BUCKETS; i ++) {
+    acquire(&bcache.reuse_locks[i]);
     b = get_least_recently_used_buffer_with_no_ref(&bcache.buffers[i]);
     if (b == 0) {
+      release(&bcache.reuse_locks[i]);
       continue;
     }
     if (least_index == -1 || b->ticks < bcache.buffers[least_index].ticks) {
+      if (least_index != -1) {
+        release(&bcache.reuse_locks[least_index]);
+      }
       least_index = i;
       least_recently_used_buf = b;
+    }else {
+      release(&bcache.reuse_locks[i]);
     }
   }
   b = least_recently_used_buf;
@@ -172,10 +172,11 @@ bget(uint dev, uint blockno)
   b->valid = 0;
   b->refcnt = 1;
   evit(b);
+  release(&bcache.reuse_locks[least_index]);
 
   // 将其插入现在的桶
   insert(&bcache.buffers[index], b);
-  release(&bcache.lock);
+  release(&(bcache.buckets[index]));
   acquiresleep(&b->lock);
   return b;
 
