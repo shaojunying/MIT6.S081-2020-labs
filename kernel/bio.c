@@ -135,10 +135,18 @@ bget(uint dev, uint blockno)
     acquiresleep(&b->lock);
     return b;
   }
+  release(&(bcache.buckets[index]));
   // 没有获取到
 
   // 获取大锁
   acquire(&bcache.lock);
+  if ((b = get_buffer_for_block(&bcache.buffers[index], dev, blockno)) != 0) {
+    // 获取到了
+    b->refcnt ++;
+    release(&(bcache.buckets[index]));
+    acquiresleep(&b->lock);
+    return b;
+  }
 
   // 找到全局LRU, 同时需要持有LRU对应桶的锁
   struct buf * least_recently_used_buf = 0;
@@ -167,7 +175,6 @@ bget(uint dev, uint blockno)
 
   // 将其插入现在的桶
   insert(&bcache.buffers[index], b);
-  release(&bcache.buckets[index]);
   release(&bcache.lock);
   acquiresleep(&b->lock);
   return b;
