@@ -29,6 +29,39 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+int
+cow_handler(uint64 va) {
+  if (va > MAXVA) {
+    return -1;
+  }
+  pte_t* pte;
+  if((pte = walk(myproc()->pagetable, va, 0)) == 0)
+    // 要访问的页面不存在
+    return -1;
+  if((*pte & PTE_C) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0) 
+    // 不是cow || 用户不可访问 || 无效的
+    return -1;
+  
+  // 在这里处理cow的情况
+  // 申请物理页面
+  char * mem;
+  if ((mem = kalloc()) == 0) 
+    // 申请物理内存失败，杀死进程即可
+    return -1;
+
+  char * pa = (char *)PTE2PA(*pte);
+  // 需要讲pa上的内容拷贝到mem中
+  memmove(mem, pa, PGSIZE);
+  kfree(pa);
+  // 释放指向 原物理内存 的引用
+
+  // 标记write位，清除cow位
+  uint flags = PTE_FLAGS(*pte);
+  *pte = PA2PTE(mem) | flags | PTE_W;
+  *pte &= (~PTE_C);
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -67,6 +100,9 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 15) {
+    if (cow_handler(r_stval()) < 0) 
+      p->killed = 1;
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

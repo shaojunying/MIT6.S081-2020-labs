@@ -21,6 +21,8 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  // 使用一个数组，维护所有物理页面的引用计数
+  int refcounts[PHY_COUNT];
 } kmem;
 
 void
@@ -43,6 +45,7 @@ freerange(void *pa_start, void *pa_end)
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
+// 释放一个指向pa的引用，当引用数为0时，才执行释放操作
 void
 kfree(void *pa)
 {
@@ -50,6 +53,10 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+  int count = decrease_ref((uint64)pa);
+  if (count > 0) {
+    return;
+  }
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -76,7 +83,29 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    kmem.refcounts[(uint64)r / PGSIZE] = 1;
+  }
   return (void*)r;
 }
+
+// 自增物理地址pa的引用
+void
+increase_ref(uint64 pa) {
+  // printf("increase a ref\n");
+  acquire(&kmem.lock);
+  kmem.refcounts[pa / PGSIZE] ++;
+  release(&kmem.lock);
+}
+
+// 自减物理地址pa的引用
+int decrease_ref(uint64 pa) {
+  // printf("decrease a ref\n");
+  acquire(&kmem.lock);
+  kmem.refcounts[pa / PGSIZE] --;
+  int res = kmem.refcounts[pa / PGSIZE];
+  release(&kmem.lock);
+  return res;
+}
+

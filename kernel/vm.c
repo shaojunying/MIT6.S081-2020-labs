@@ -111,6 +111,45 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
+// 如果不可读，需要重新为其分配页面
+uint64
+walkaddr_for_write(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+
+  if(va >= MAXVA)
+    return 0;
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  if ((*pte & PTE_C) != 0) {
+    // 将其标记为可写的
+    char * mem;
+    if ((mem = kalloc()) == 0) {
+      // 申请物理内存失败，杀死进程即可
+      panic("kalloc err");
+    }
+    char * pa = (char *)PTE2PA(*pte);
+    // 需要讲pa上的内容拷贝到mem中
+    memmove(mem, pa, PGSIZE);
+    kfree(pa);
+    // 释放指向 原物理内存 的引用
+    // 替换pa，更新flag
+    uint flags = PTE_FLAGS(*pte);
+    // 标记write位，清除cow位
+    flags |= PTE_W;
+    flags &= (~PTE_C);
+    *pte = PA2PTE(mem) | flags;
+  }
+  pa = PTE2PA(*pte);
+  return pa;
+}
+
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
@@ -311,7 +350,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -320,13 +359,17 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // 实现cow，将child和parent映射到同一物理页面，增加该物理页面的引用计数
+    if (flags & PTE_W) {
+      // 如果页表项可写，需要将其修改为不可写，之后标记其为cow页
+      flags &= ~PTE_W;
+      flags |= PTE_C;
+      *pte = PA2PTE(pa) | flags;
+    }
+    if (mappages(new, i, PGSIZE, (uint64)pa, flags) != 0) {
       goto err;
     }
+    increase_ref(pa);
   }
   return 0;
 
@@ -358,7 +401,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    pa0 = walkaddr_for_write(pagetable, va0);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
