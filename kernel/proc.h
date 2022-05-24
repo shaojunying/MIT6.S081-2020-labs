@@ -82,6 +82,16 @@ struct trapframe {
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+// 存储每个mmap需要保存的相关数据
+struct vma {
+  uint64 addr; // 内存映射区域的起始地址
+  uint64 len;  // 映射区域的长度 [addr, addr+len)之间即为映射区域
+  uint   perm; // 该区域的权限：可读、可写、可执行
+  uint   flag; // 进程对内存的修改是共享还是私有的？
+  struct file* file_pointer; // 内存映射的文件指针
+  uint   offset;
+};
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -103,4 +113,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct vma mmaps[N_VMA];     // vma数组，保存已开启的mmap信息
 };

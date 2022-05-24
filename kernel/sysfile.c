@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -483,4 +484,175 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+
+// 找到一块内存区域，用于执行mmap映射
+// 此方案会复用刚被munmap的区域，来解决内存碎片问题
+uint64
+find_unallocated_mmap_area(uint64 len) {
+  struct proc * p = myproc();
+  struct vma * v = p->mmaps;
+  for (int i = 0; i < N_VMA; i ++) {
+    uint64 end_addr = (v[i].addr == 0 ? TRAPFRAME : v[i].addr);
+    // 判断[end_addr - len, end_addr]和其余区间是否重叠
+    uint64 start_addr = end_addr - len;
+    if (start_addr < p->sz) {
+      // 到达了堆空间，不可用
+      continue;
+    }
+    int overlap = 0;
+    for (int j = 0; j < N_VMA; j ++) {
+      uint64 max_start = start_addr > v[j].addr ? start_addr : v[j].addr;
+      uint64 min_end = end_addr < v[j].addr + v[j].len ? end_addr : v[j].addr + v[j].len;
+      if (max_start < min_end) {
+        overlap = 1;
+        break;
+      }
+    }
+    if (!overlap) {
+      return start_addr;
+    }
+  }
+  return 0;
+}
+
+// 将vma结构放入进程的vma数组中
+int
+push_vma(struct vma v) {
+  struct proc * p = myproc();
+  for (int i = 0; i < N_VMA; i ++) {
+    if (p->mmaps[i].addr == 0) {
+      p->mmaps[i] = v;
+      return 0;
+    }
+  }
+  return -1;
+}
+
+
+// 这里返回的是映射内存的起始地址
+uint64
+mmap(uint64 addr, uint64 len, int perm, int flags, int fd, uint64 offset) {
+  struct proc* p = myproc();
+  if (p->ofile[fd]->writable == 0 && (perm & PROT_WRITE) != 0 && (flags & MAP_SHARED) != 0) {
+    // 如果满足 文件只读、mmap可写且共享，那么应该返回错误
+    printf("[Kernel] mmap: incorrect perm.\n");
+    return -1;
+  }
+
+  // 首先找到合适的内存地址
+  uint64 start_addr;
+  if ((start_addr = find_unallocated_mmap_area(len)) == 0) {
+    // 申请不到空闲内存，直接返回
+    printf("[Kernel] mmap: fail to allocate memory area.\n");
+    return -1;
+  }
+
+  // 构造vma
+  struct vma v;
+  v.addr = start_addr;
+  v.len = len;
+  v.flag = flags;
+  v.perm = perm;
+  v.offset = offset;
+  v.file_pointer = p->ofile[fd];
+  filedup(v.file_pointer);
+  // 将新的vma放入结构体中
+  if (push_vma(v) == -1) {
+    // 放入失败
+    fileclose(v.file_pointer);
+    printf("[Kernel] mmap: fail to push memory area.\n");
+    return -1;
+  }
+  printf("mmap succ\n");
+  return start_addr;
+}
+
+uint64
+sys_mmap(void) {
+  uint64 addr;
+  uint64 len;
+  int perm, flags;
+  int fd;
+  uint64 offset;
+  if (argaddr(0, &addr) < 0) {
+    return -1;
+  }
+  if (argaddr(1, &len) < 0 || argint(2, &perm) < 0 || argint(3, &flags) < 0 || argint(4, &fd) < 0 || argaddr(5, &offset) < 0) {
+    return -1;
+  }
+  // mmap
+  return mmap(addr, len, perm, flags, fd, offset);
+}
+
+// 找到addr所在的vma区域
+struct vma *
+find_vma_area(uint64 addr) {
+  struct proc * p = myproc();
+  // 在区间内，遍历所有vma，看va处于哪个区间内
+  for (int i = 0; i < N_VMA; i ++) {
+    struct vma* v = &p->mmaps[i];
+    if (v->addr <= addr && addr < v->addr + v->len) {
+      return v;
+    }
+  }
+  return 0;
+}
+
+uint64
+munmap(uint64 addr, uint64 len) {
+  struct vma * v;
+  if ((v = find_vma_area(addr)) == 0) {
+    printf("[Kernel] munmmap: fail to find vma for addr.\n");
+    return -1;
+  }
+  
+  uint64 end_addr = addr + len;
+  if (addr != v->addr && end_addr != v->addr + v->len) {
+    // 不是在边界上释放，会出现洞，返回错误
+    printf("[Kernel] munmmap: not implement munmap.\n");
+    return -1;
+  }
+
+  if (end_addr > v->addr + v->len) {
+    // 要释放的区域超出了vma
+    printf("[Kernel] munmmap: munmap area exceed end addr.\n");
+    return -1;
+  }
+
+  struct proc * p = myproc();
+
+  // 如果是Shared，还需要判断是否需要将内容写入文件
+  if ((v->flag & MAP_SHARED) != 0) {
+    filewrite(v->file_pointer, addr, len);
+  }
+  // 释放[start, end)之间的内存,更新vma信息
+  uvmunmap_munmap(p->pagetable, addr, len / PGSIZE, 1);
+  v->addr += len;
+  v->len -= len;
+  v->offset += len;
+  
+  // 如果vma的所有内存都释放完毕了，则还需要将vma结构释放掉
+  if (0 == v->len) {
+    fileclose(v->file_pointer);
+    memset(v, 0, sizeof(struct vma));
+  }
+
+  return 0;
+}
+
+uint64
+sys_munmap(void) {
+  // munmap(addr, length)
+  uint64 addr;
+  uint64 len;
+  if (argaddr(0, &addr) < 0) {
+    return -1;
+  }
+  if (argaddr(1, &len) < 0) {
+    return -1;
+  }
+  // 执行unmap操作
+  return munmap(addr, len);
 }

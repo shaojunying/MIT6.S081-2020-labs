@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -29,6 +33,57 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+uint64 mmap_hander(uint64 va) {
+  // 找到va对应的vma
+  struct vma* v;
+  if ((v = find_vma_area(va)) == 0) {
+    // 没有找到对应的区间，直接返回-1即可
+    printf("fail to find vma\n");
+    return -1;
+  }
+
+  struct proc *p = myproc();
+
+  char* mem;
+  if ((mem = kalloc()) == 0) {
+    printf("fail to kalloc\n");
+    return -1;
+  }
+  // 在页面内填充0
+  memset(mem, 0, PGSIZE);
+  // 映射页面
+  uint perm = PTE_U;
+  if ((v->perm & PROT_READ) != 0) {
+    perm |= PTE_R;
+  }
+  if ((v->perm & PROT_WRITE) != 0) {
+    perm |= PTE_W;
+  }
+  if ((v->perm & PROT_EXEC) != 0) {
+    perm |= PTE_X;
+  }
+  if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, perm) < 0) {
+    kfree(mem);
+    printf("fail to mappages\n");
+    return -1;
+  }
+
+  // 将文件中的内容读取到mmap内存区域中
+  struct file * f = v->file_pointer;
+  if (f->type == FD_INODE) {
+    ilock(f->ip);
+    uint64 offset = v->offset + (va - v->addr);
+    if (readi(f->ip, 1, va, offset, PGSIZE) == 0) {
+      // 读取失败
+      iunlock(f->ip);
+      printf("fail to read file\n");
+      return -1;
+    }
+    iunlock(f->ip);
+  }
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -46,6 +101,7 @@ usertrap(void)
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
+  uint64 scause = 0;
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
@@ -67,6 +123,11 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if ((scause = r_scause()) == 13 || scause == 15) {
+    // Write or Read Page Fault
+    if (mmap_hander(r_stval()) != 0) {
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

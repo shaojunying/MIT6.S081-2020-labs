@@ -5,6 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+
+#include "fs.h"
+#include "fcntl.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -296,6 +301,14 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  // 拷贝 mmap
+  memmove(np->mmaps, p->mmaps, sizeof(struct vma) * N_VMA);
+  for (i = 0; i < N_VMA; i ++) {
+    if ((&np->mmaps[i])->addr != 0) {
+      filedup((&np->mmaps[i])->file_pointer);
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -350,6 +363,15 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+   // 释放mmap
+  for (int i = 0; i < N_VMA; i ++) {
+    struct vma * v = &p->mmaps[i];
+    if (v->addr != 0) {
+      // 释放掉相应的内存
+      munmap(v->addr, v->len);
     }
   }
 
