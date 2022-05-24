@@ -11,10 +11,30 @@
 #define MAX_THREAD  4
 
 
+// 用于保存callee registers
+struct context {
+  uint64 ra;
+  uint64 sp;
+
+  // callee-saved
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
+
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
-
+  struct context context;   /* 保存callee registers */
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
@@ -59,10 +79,7 @@ thread_schedule(void)
     next_thread->state = RUNNING;
     t = current_thread;
     current_thread = next_thread;
-    /* YOUR CODE HERE
-     * Invoke thread_switch to switch from t to next_thread:
-     * thread_switch(??, ??);
-     */
+    thread_switch((uint64)&t->context, (uint64)&next_thread->context);
   } else
     next_thread = 0;
 }
@@ -76,7 +93,11 @@ thread_create(void (*func)())
     if (t->state == FREE) break;
   }
   t->state = RUNNABLE;
-  // YOUR CODE HERE
+  memset(&t->context, 0, sizeof(struct context));
+  
+  t->context.ra = (uint64)func;
+  // 注意数组从0到n-1的地址是增长的，而栈的话，从栈底到栈顶的地址是递减的，因此这里的sp起初应该指向数组的最后一个元素
+  t->context.sp = (uint64)(t->stack + STACK_SIZE - 1);
 }
 
 void 
