@@ -170,6 +170,9 @@ uint64          uvmalloc(pagetable_t, uint64, uint64);
 uint64          uvmdealloc(pagetable_t, uint64, uint64);
 pagetable_t     generate_kernel_pagetable(void);
 void            kvmfree(pagetable_t);
+pte_t *         walk(pagetable_t, uint64, int);
+int             uvmcopy1(pagetable_t old, pagetable_t new, uint64 sz);
+void            vmprint(pagetable_t pagetable);
 #ifdef SOL_COW
 #else
 int             uvmcopy(pagetable_t, pagetable_t, uint64);

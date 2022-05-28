@@ -8,6 +8,11 @@
 #include "spinlock.h"
 #include "proc.h"
 
+static struct stats {
+  int ncopyin;
+  int ncopyinstr;
+} stats;
+
 /*
  * the kernel's page table.
  */
@@ -345,6 +350,40 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
+int
+uvmcopy1(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+
+  for(i = 0; i < sz; i += PGSIZE){
+    if((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte) & ~PTE_U;
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      goto err;
+    }
+    // char *mem;
+    // // 这里现在的逻辑是深拷贝，其实我们需要的是浅拷贝
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+    //   kfree(mem);
+    //   goto err;
+    // }
+  }
+  return 0;
+
+ err:
+  uvmunmap(new, 0, i / PGSIZE, 1);
+  return -1;
+}
+
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
 void
@@ -389,22 +428,12 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
+  struct proc *p = myproc();
 
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
+  if (srcva >= p->sz || srcva+len >= p->sz || srcva+len < srcva)
+    return -1;
+  memmove((void *) dst, (void *)srcva, len);
+  stats.ncopyin++;   // XXX lock
   return 0;
 }
 
@@ -415,40 +444,16 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
-
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
+  struct proc *p = myproc();
+  char *s = (char *) srcva;
+  
+  stats.ncopyinstr++;   // XXX lock
+  for(int i = 0; i < max && srcva + i < p->sz; i++){
+    dst[i] = s[i];
+    if(s[i] == '\0')
+      return 0;
   }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+  return -1;
 }
 
 // 在page table中添加映射
@@ -491,6 +496,8 @@ kvmfree(pagetable_t pagetable)
   // vmprint(pagetable);
   // 释放栈
   kvmunmap1(pagetable, KSTACK(0), PGSIZE * 2, 1);
+  // 释放用户地址映射
+  kvmunmap1(pagetable, 0, PLIC, 0);
 
   // uart registers
   // kvmunmap1(pagetable, 0, PHYSTOP, 0);

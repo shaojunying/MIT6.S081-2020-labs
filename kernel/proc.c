@@ -222,6 +222,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  uvmcopy1(p->pagetable, p->kernel_pagetable, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -245,6 +246,9 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    if (sz + n > PLIC) {
+      return -1;
+    }
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
@@ -275,6 +279,16 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  // 将父进程的整个内核页表拷贝给子进程，不能只拷贝用户态数据
+  
+  uvmcopy1(p->kernel_pagetable, np->kernel_pagetable, p->sz);
+
+  // 还要拷贝内核栈
+  // 获取旧内核栈的物理地址
+  uint64 stack_pa = walkaddr(np->kernel_pagetable, KSTACK(0));
+  // 将内容拷贝到其中
+  either_copyout(0, stack_pa, (char*)walkaddr(p->kernel_pagetable, KSTACK(0)), PGSIZE);
+
   np->sz = p->sz;
 
   np->parent = p;
