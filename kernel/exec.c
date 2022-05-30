@@ -122,9 +122,9 @@ exec(char *path, char **argv)
 
   // 这里我们不能直接销毁原来的内核页表，因为当前进程的内核栈也在内核页表中，
   // 因此我们应该先清除内核页表中的用户内存区域，并重新从用户页表中复制。
-  uvmunmap(p->kernel_pagetable, 0, PGROUNDUP(oldsz)/PGSIZE, 0);
+  // uvmunmap1(p->kernel_pagetable, 0, PGROUNDUP(oldsz)/PGSIZE, 0);
   // 重新拷贝
-  uvmcopy1(p->pagetable, p->kernel_pagetable, p->sz);
+  // uvmcopy1(p->pagetable, p->kernel_pagetable, p->sz);
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:

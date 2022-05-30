@@ -50,8 +50,8 @@ sys_sbrk(void)
   if(growproc(n) < 0)
     return -1;
   struct proc * p = myproc();
-  uvmunmap(p->kernel_pagetable, 0, PGROUNDUP(addr)/PGSIZE, 0);
-  uvmcopy1(p->pagetable, p->kernel_pagetable, p->sz);
+  uvmunmap1(p->kernel_pagetable, 0, PGROUNDUP(addr)/PGSIZE, 0);
+  // uvmcopy1(p->pagetable, p->kernel_pagetable, p->sz);
   return addr;
 }
 

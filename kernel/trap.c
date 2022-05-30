@@ -128,6 +128,37 @@ usertrapret(void)
   ((void (*)(uint64,uint64))fn)(TRAPFRAME, satp);
 }
 
+uint64 handler(uint64 va) {
+  if (va >= PLIC) {
+    printf("va is too large\n");
+    return -1;
+  }
+  struct proc * p = myproc();
+  uint64 pa = walkaddr(p->kernel_pagetable, va);
+  if (pa != 0) {
+    printf("handler: page already be mapped in p->kernel_pagetable\n");
+    return -1;
+  }
+  pte_t* pte =walk(p->pagetable, va, 0);
+  if(pte == 0)
+    return -1;
+  if((*pte & PTE_V) == 0)
+    return -1;
+  if((*pte & PTE_U) == 0)
+    return -1;
+  uint flags = PTE_FLAGS(*pte);
+  flags &= ~PTE_U;
+  pa = PTE2PA(*pte);
+  // uint64 flags = 0x1111;
+  // uint64 pa = (uint64)kalloc();
+  // printf("flags: %p\n", flags);
+  // printf("pid: %d\n", myproc()->pid);
+  printf("sz: %p\n", p->sz);
+  uvmcopy1(p->pagetable, p->kernel_pagetable, p->sz);
+  // kvmmap1(p->kernel_pagetable, va, pa, PGSIZE, flags);
+  return 0;
+}
+
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
 void 
@@ -143,6 +174,14 @@ kerneltrap()
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
+  if (r_scause() == 13 || r_scause() == 15){
+    // 处理内核页缺页的情况
+    if (handler(r_stval()) != 0) {
+      printf("scause %p\n", scause);
+      printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+      panic("kerneltrap");
+    }
+  } else 
   if((which_dev = devintr()) == 0){
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
